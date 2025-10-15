@@ -1,0 +1,89 @@
+name: Deploy MongoDB Indexes
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'indexes_to_deploy/**'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate Index Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for JavaScript files
+        run: |
+          echo "Checking for JavaScript files in indexes_to_deploy/..."
+          if [ ! -d "indexes_to_deploy" ]; then
+            echo "✗ indexes_to_deploy directory not found"
+            exit 1
+          fi
+
+          js_files=$(find indexes_to_deploy -name "*.js" -type f)
+          if [ -z "$js_files" ]; then
+            echo "✗ No .js files found in indexes_to_deploy/"
+            exit 1
+          fi
+
+          echo "✓ Found JavaScript files:"
+          echo "$js_files" | while read file; do
+            echo "  - $file"
+          done
+
+      - name: Validate JavaScript syntax
+        run: |
+          echo "Validating JavaScript syntax..."
+          exit_code=0
+          for file in indexes_to_deploy/*.js; do
+            if [ -f "$file" ]; then
+              echo "Checking $file..."
+              # Use Node.js to check basic syntax
+              node --check "$file" 2>&1 && echo "  ✓ $file is valid" || { echo "  ✗ $file has syntax errors"; exit_code=1; }
+            fi
+          done
+          exit $exit_code
+
+  deploy:
+    name: Deploy Indexes to MongoDB
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install MongoDB Shell (mongosh)
+        run: |
+          echo "Installing MongoDB Shell..."
+          wget -qO- https://www.mongodb.org/static/pgp/server-7.0.asc | sudo tee /etc/apt/trusted.gpg.d/server-7.0.asc
+          echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-mongosh
+          mongosh --version
+          echo "✓ MongoDB Shell installed successfully"
+
+      - name: Deploy indexes to MongoDB
+        env:
+          MONGODB_CONNECTION_STRING: ${{ secrets.MONGODB_CONNECTION_STRING }}
+          INDEXES_DIRECTORY: indexes_to_deploy
+        run: |
+          echo "Starting MongoDB index deployment..."
+          python deploy_indexes.py
+
+      - name: Upload deployment logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-logs-${{ github.run_number }}
+          path: deployment_logs/
+          retention-days: 30
